@@ -18,14 +18,16 @@ bot = commands.Bot(command_prefix='$', intents=intents)
 handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
 
 cest = ZoneInfo("Europe/Warsaw")
-time_reminder = datetime.time(hour=13, minute=31, tzinfo=cest)
-time_reset = datetime.time(hour=13, minute=2, tzinfo=cest)
+time_reminder = datetime.time(hour=19, minute=00, tzinfo=cest)
+time_reset = datetime.time(hour=24, minute=00, tzinfo=cest)
+time_end = datetime.now(tz=cest) + datetime.timedelta(days=30)
 
 current_challenge = None
 
 class Challenge():
     def __init__(self):
         self.users_participating = {}
+        self.time_end = datetime.now(tz=cest) + datetime.timedelta(days=30)
 
     def join(self, user):
         self.users_participating[user] = False
@@ -70,6 +72,15 @@ class Reminder(commands.Cog):
         for user in current_challenge.users_participating:
             if current_challenge.get_status(user) == True:
                 current_challenge.reset(user)
+    
+    @tasks.loop(time=time_end)
+    async def end_challenge(self):
+        if current_challenge:
+            channel = discord.utils.get(self.bot.get_all_channels(), name='30-days-challenge')
+            if channel:
+                await channel.send("The 30 day drawing challenge has ended! Thank you for participating!")
+            global current_challenge
+            current_challenge = None
 
     async def update_reminder_time(self, new_time):
         self.reminder.change_interval(time=new_time)
@@ -77,12 +88,16 @@ class Reminder(commands.Cog):
     async def update_reset_time(self, new_time):
         self.reset_users.change_interval(time=new_time)
 
+    async def update_end_time(self, new_time):
+        self.end_challenge.change_interval(time=new_time)
+
 @bot.command('startChallenge')
 async def start_challenge(ctx):
     if ctx.channel.name == '30-days-challenge':
         global current_challenge
         if current_challenge is None:
             current_challenge = Challenge()
+            await bot.get_cog('Reminder').update_end_time(current_challenge.time_end)
             await ctx.send('A 30 day drawing challenge has been started! Use `$join` to participate.')
         else:
             await ctx.send('A challenge is already in progress. Use `$join` to participate.')
@@ -202,6 +217,8 @@ async def info(ctx):
         await ctx.send(
             "This is a 30 day drawing challenge bot.\n"
             "Available commands:\n"
+            "`$startChallenge` - Start a new challenge\n"
+            "`$stopChallenge` - Stop the current challenge\n"
             "`$join` - Join the challenge\n"
             "`$leave` - Leave the challenge\n"
             "`$resetMe` - Reset your participation for today\n"
