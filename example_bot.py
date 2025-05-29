@@ -21,7 +21,29 @@ cest = ZoneInfo("Europe/Warsaw")
 time_reminder = datetime.time(hour=13, minute=31, tzinfo=cest)
 time_reset = datetime.time(hour=13, minute=2, tzinfo=cest)
 
-users_participating = {}
+current_challenge = None
+
+class Challenge():
+    def __init__(self):
+        self.users_participating = {}
+
+    def join(self, user):
+        self.users_participating[user] = False
+
+    def leave(self, user):
+        if user in self.users_participating:
+            del self.users_participating[user]
+
+    def reset(self, user):
+        if user in self.users_participating:
+            self.users_participating[user] = False
+
+    def reset_all(self):
+        for user in self.users_participating:
+            self.users_participating[user] = False
+
+    def get_status(self, user):
+        return self.users_participating.get(user, None)
 
 class Reminder(commands.Cog):
     def __init__(self, bot):
@@ -36,17 +58,18 @@ class Reminder(commands.Cog):
     @tasks.loop(time=time_reminder)
     async def reminder(self):
         channel = discord.utils.get(self.bot.get_all_channels(), name='30-days-challenge')
-        for user in users_participating:
-            if users_participating[user] == False:
-                if channel:
-                    await channel.send(f"Don't forget to submit your drawing for today, {user.mention}!")
+        if current_challenge:
+            for user in current_challenge.users_participating:
+                if current_challenge.get_status(user) == False:
+                    if channel:
+                        await channel.send(f"Don't forget to submit your drawing for today, {user.mention}!")
 
     '''Users' participation statuses reset at midnight by default'''
     @tasks.loop(time=time_reset)
     async def reset_users(self):
-        for user in users_participating:
-            if users_participating[user] == True:
-                users_participating[user] = False
+        for user in current_challenge.users_participating:
+            if current_challenge.get_status(user) == True:
+                current_challenge.reset(user)
 
     async def update_reminder_time(self, new_time):
         self.reminder.change_interval(time=new_time)
@@ -54,8 +77,28 @@ class Reminder(commands.Cog):
     async def update_reset_time(self, new_time):
         self.reset_users.change_interval(time=new_time)
 
-@bot.command()
-async def setReminderTime(ctx, arg):
+@bot.command('startChallenge')
+async def start_challenge(ctx):
+    if ctx.channel.name == '30-days-challenge':
+        global current_challenge
+        if current_challenge is None:
+            current_challenge = Challenge()
+            await ctx.send('A 30 day drawing challenge has been started! Use `$join` to participate.')
+        else:
+            await ctx.send('A challenge is already in progress. Use `$join` to participate.')
+
+@bot.command('stopChallenge')
+async def stop_challenge(ctx):
+    global current_challenge
+    if ctx.channel.name == '30-days-challenge':
+        if current_challenge:
+            current_challenge = None
+            await ctx.send('The 30 day drawing challenge has been stopped.')
+        else:
+            await ctx.send('No challenge is currently in progress. Use `$startChallenge` to start a new one.')
+
+@bot.command('setReminderTime')
+async def set_reminder_time(ctx, arg):
     if ctx.channel.name == '30-days-challenge':
         try:
             hour, minute = map(int, arg.split(':'))
@@ -65,8 +108,8 @@ async def setReminderTime(ctx, arg):
         except ValueError:
             await ctx.send('Please provide the time in the HH:MM format.')
 
-@bot.command()
-async def setResetTime(ctx, arg):
+@bot.command('setResetTime')
+async def set_reset_time(ctx, arg):
     if ctx.channel.name == '30-days-challenge':
         try:
             hour, minute = map(int, arg.split(':'))
@@ -79,55 +122,79 @@ async def setResetTime(ctx, arg):
 @bot.command()
 async def join(ctx, *args, member: discord.Member = None):
     if ctx.channel.name == '30-days-challenge':
-        member = member or ctx.author
-        if member not in users_participating:
-            users_participating[member] = False
-            await ctx.send(f'{member.name} has joined the 30 day drawing challenge!')
+        global current_challenge
+        if current_challenge:
+            member = member or ctx.author
+            if member not in current_challenge.users_participating:
+                current_challenge.join(member)
+                await ctx.send(f'{member.name} has joined the 30 day drawing challenge!')
+            else:
+                await ctx.send(f'{member.name}, you are already participating!')
         else:
-            await ctx.send(f'{member.name}, you are already participating!')
+            await ctx.send('No challenge is currently in progress. Use `$startChallenge` to start a new one.')
 
 @bot.command()
 async def leave(ctx, *args, member: discord.Member = None):
     if ctx.channel.name == '30-days-challenge':
-        member = member or ctx.author
-        if member in users_participating:
-            del users_participating[member]
-            await ctx.send(f'{member.name} has left the 30 day drawing challenge!')
+        global current_challenge
+        if current_challenge:
+            member = member or ctx.author
+            if member in current_challenge.users_participating:
+                current_challenge.leave(member)
+                await ctx.send(f'{member.name} has left the 30 day drawing challenge!')
+            else:
+                await ctx.send(f'{member.name}, you are not participating!')
         else:
-            await ctx.send(f'{member.name}, you are not participating!')
+            await ctx.send('No challenge is currently in progress. Use `$startChallenge` to start a new one.')
 
-@bot.command()
-async def resetMe(ctx):
+@bot.command('resetMe')
+async def reset_me(ctx):
     if ctx.channel.name == '30-days-challenge':
-        author = ctx.author
-        if author in users_participating:
-            users_participating[author] = False
-            await ctx.send(f'{author.name}, your participation has been reset for today\'s challenge!')
+        global current_challenge
+        if current_challenge:
+            author = ctx.author
+            if author in current_challenge.users_participating:
+                current_challenge.reset(author)
+                await ctx.send(f'{author.name}, your participation has been reset for today\'s challenge!')
+            else:
+                await ctx.send(f'{author.name}, you are not participating in the challenge!')
         else:
-            await ctx.send(f'{author.name}, you are not participating in the challenge!')
+            await ctx.send('No challenge is currently in progress. Use `$startChallenge` to start a new one.')
 
-@bot.command()
-async def resetAllDaily(ctx):
+@bot.command('resetAllDaily')
+async def reset_all_daily(ctx):
     if ctx.channel.name == '30-days-challenge':
-        for user in users_participating:
-            users_participating[user] = False
-        await ctx.send('All users have been reset for today\'s challenge!')
-
-@bot.command() 
-async def resetAll(ctx):
-    if ctx.channel.name == '30-days-challenge':
-        users_participating.clear()
-        await ctx.send(f'All users have been removed from the 30 day drawing challenge!')
-
-@bot.command()
-async def myStatus(ctx):
-    if ctx.channel.name == '30-days-challenge':
-        author = ctx.author
-        if author in users_participating:
-            status = 'submitted' if users_participating[author] else 'not submitted'
-            await ctx.send(f'{author.name}, you have {status} your daily drawing today.')
+        global current_challenge
+        if current_challenge:
+            for user in current_challenge.users_participating:
+                current_challenge.reset(user)
+            await ctx.send('All users have been reset for today\'s challenge!')
         else:
-            await ctx.send(f'{author.name}, you are not participating in the challenge!')
+            await ctx.send('No challenge is currently in progress. Use `$startChallenge` to start a new one.')
+
+@bot.command('resetAll') 
+async def reset_all(ctx):
+    if ctx.channel.name == '30-days-challenge':
+        global current_challenge
+        if current_challenge:
+            current_challenge.users_participating.clear()
+            await ctx.send(f'All users have been removed from the 30 day drawing challenge!')
+        else:
+            await ctx.send('No challenge is currently in progress. Use `$startChallenge` to start a new one.')
+
+@bot.command('myStatus')
+async def my_status(ctx):
+    if ctx.channel.name == '30-days-challenge':
+        global current_challenge
+        if current_challenge:
+            author = ctx.author
+            if author in current_challenge.users_participating:
+                status = 'submitted' if current_challenge.get_status(author) else 'not submitted'
+                await ctx.send(f'{author.name}, you have {status} your daily drawing today.')
+            else:
+                await ctx.send(f'{author.name}, you are not participating in the challenge!')
+        else:
+            await ctx.send('No challenge is currently in progress. Use `$startChallenge` to start a new one.')
 
 @bot.command()
 async def info(ctx):
@@ -157,18 +224,19 @@ async def on_message(message):
         return
 
     if message.channel.name == '30-days-challenge':
-        if message.attachments:
-            for attachment in message.attachments:
-                if attachment.filename.endswith(('.png', '.jpg', '.jpeg')):
-                    author = message.author
-                    if author in users_participating:
-                        if users_participating[author] == False:
-                            await message.channel.send(f'{author.name} has completed the daily challenge!')
-                            users_participating[author] = True
-                        else:
-                            await message.channel.send(f'{author.name}, you have already submitted your drawing for today!')
+        global current_challenge
+        if current_challenge:
+            if message.attachments:
+                for attachment in message.attachments:
+                    if attachment.filename.endswith(('.png', '.jpg', '.jpeg')):
+                        author = message.author
+                        if author in current_challenge.users_participating:
+                            if current_challenge.get_status(author) == False:
+                                await message.channel.send(f'{author.name} has completed the daily challenge!')
+                                current_challenge.users_participating[author] = True
+                            else:
+                                await message.channel.send(f'{author.name}, you have already submitted your drawing for today!')
 
     await bot.process_commands(message)
-
 
 bot.run(TOKEN, log_handler=handler, log_level=logging.DEBUG)
